@@ -1,0 +1,12 @@
+.idea/
+.DS_Store
+__pycache__/
+*.egg-info/
+*.egg
+*.py[cod]
+*.so
+*~
+build/
+dist/
+output/
+nohup.out
