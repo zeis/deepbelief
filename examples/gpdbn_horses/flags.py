@@ -43,8 +43,8 @@ flags['learning_rate'] = 0.001
 flags['noise_variance'] = 0.01
 flags['fixed_noise_variance'] = True
 flags['temperature'] = 0.1
-flags['num_iterations'] = 5000
-flags['fixed_X_num_iterations'] = 1000
+flags['num_iterations'] = 50000
+flags['fixed_X_num_iterations'] = 10000
 flags['eval_interval'] = 1000
 flags['ckpt_interval'] = flags['num_iterations']
 
