@@ -2,12 +2,15 @@ import os
 import pickle
 import numpy as np
 from scipy import misc
+import matplotlib
+matplotlib.use("Agg")
 import tensorflow as tf
 from deepbelief.layers.data import Data
 from deepbelief.layers.rbm import RBM
 from deepbelief.layers.gprbm import GPRBM
 from deepbelief.layers import gplvm
 from deepbelief.util import init_logging
+from deepbelief import preprocessing
 import deepbelief.config as c
 
 # Import local flags.py module without specifying absolute path
@@ -17,15 +20,13 @@ module = importlib.util.module_from_spec(module_spec)
 module_spec.loader.exec_module(module)
 flags = module.flags
 
-# Note, this script should be run after the model is trained (run train.py first).
-# Basically, the generalisation experiment consist in trying to "reconstruct" the
-# test data as closely as possible. The output of this script will be two Numpy arrays,
-# one simply containing the test data and the other one the corresponding data generated
-# by the model.
+load_model = False
+save_model = True
 
 init_logging(flags['test_log_file'])
 
 test_data = Data(flags['test_data'],
+                 has_labels=False,
                  shuffle_first=False,
                  batch_size=flags['test_generalisation_batch_size'],
                  log_epochs=flags['data_log_epochs'],
@@ -34,6 +35,16 @@ test_data = Data(flags['test_data'],
 test_data_batch = test_data.next_batch()
 
 x_test = tf.get_variable(name='x_test', initializer=tf.random_normal(shape=(1, flags['q']), dtype=c.float_type))
+
+training_data = Data(flags['training_data'],
+                     has_labels=True,
+                     shuffle_first=flags['shuffle_data'],
+                     batch_size=flags['training_batch_size'],
+                     log_epochs=flags['data_log_epochs'],
+                     name='TrainingData')
+
+Y, Y_labels = training_data.next_batch()
+print("Y", Y.shape)
 
 config = tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True))
 session = tf.Session(config=config)
@@ -44,7 +55,7 @@ layer1 = RBM(session=session,
              temperature=flags['temperature'],
              name=flags['layer_1_name'])
 
-layer1.restore(flags['layer_1_ckpt'])
+layer1.init_variables()
 
 layer2 = RBM(session=session,
              num_v=flags['layer_1_num_h'],
@@ -53,20 +64,34 @@ layer2 = RBM(session=session,
              bottom=layer1,
              name=flags['layer_2_name'])
 
-layer2.restore(flags['layer_2_ckpt'])
+layer2.init_variables()
 
 kern = gplvm.SEKernel(session=session,
                       alpha=flags['kernel_alpha'],
                       gamma=flags['kernel_gamma'],
                       ARD=flags['kernel_ard'],
                       Q=flags['q'])
-kern.restore(flags['kernel_ckpt'])
+
+# X0 = np.random.multivariate_normal(
+#     [0] * flags['q'],
+#     np.identity(flags['q']),
+#     flags['training_batch_size'])
+
+X0 = preprocessing.PCA(Y, flags['q'])
+
 
 layer3 = GPRBM(num_v=flags['layer_2_num_h'],
                num_h=flags['layer_3_num_h'],
+               max_training_batch_size=flags['max_training_batch_size'],
+               max_prediction_batch_size=flags['max_prediction_batch_size'],
+               approx_num_images_per_side=flags['approx_num_images_per_side'],
+               pretrain_iterations=1,
                Q=flags['q'],
+               X0=X0,
                N=flags['training_batch_size'],
+               V=Y,
                eval_flag=True,
+               Y_labels=Y_labels,
                kern=kern,
                noise_variance=flags['noise_variance'],
                fixed_noise_variance=flags['fixed_noise_variance'],
@@ -76,9 +101,15 @@ layer3 = GPRBM(num_v=flags['layer_2_num_h'],
                session=session,
                name=flags['layer_3_name'])
 
-layer3.restore(flags['layer_3_ckpt'])
+# layer3.init_variables()
 
-layer3.build_model()
+# layer3.build_model()
+
+var_list = tf.global_variables()
+var_list.remove(x_test)
+saver = tf.train.Saver(var_list)
+# saver = tf.train.Saver()
+saver.restore(sess=session, save_path=flags['ckpt_file'])
 
 learning_rate = flags['test_generalisation_learning_rate']
 optimizer = tf.train.GradientDescentOptimizer(learning_rate=flags['test_generalisation_learning_rate'])
@@ -90,6 +121,7 @@ layer3.test_generalisation(test_data=test_data_batch,
                            optimizer=optimizer,
                            log_var_scaling=flags['test_generalisation_log_var_scaling'],
                            num_iterations=flags['test_generalisation_num_iterations'],
+                           method=flags['test_generalisation_method'],
                            num_runs=flags['test_generalisation_num_runs'],
                            num_samples_to_average=flags['test_generalisation_num_samples_to_average'])
 

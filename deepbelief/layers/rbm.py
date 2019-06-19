@@ -61,15 +61,13 @@ class RBM(layer.Layer):
                                              dtype=c.float_type)
                 self.W = tf.get_variable(initializer=init_W, name='W')
 
-            if not hasattr(self, 'b'):
-                # Visible bias vector
-                init_b = tf.zeros(shape=(num_v, 1), dtype=c.float_type)
-                self.b = tf.get_variable(initializer=init_b, name='b')
+            # Visible bias vector
+            init_b = tf.zeros(shape=(num_v, 1), dtype=c.float_type)
+            self.b = tf.get_variable(initializer=init_b, name='b')
 
-            if not hasattr(self, 'c'):
-                # Hidden bias vector
-                init_c = tf.zeros(shape=(1, num_h), dtype=c.float_type)
-                self.c = tf.get_variable(initializer=init_c, name='c')
+            # Hidden bias vector
+            init_c = tf.zeros(shape=(1, num_h), dtype=c.float_type)
+            self.c = tf.get_variable(initializer=init_c, name='c')
 
             # Learning rate
             init_lr = tf.constant(lr, dtype=c.float_type)
@@ -103,18 +101,6 @@ class RBM(layer.Layer):
         params = {'W': self.W, 'b': self.b, 'c': self.c}
 
         super().__init__(params, bottom, session, name)
-
-    def _init_optimizer_slots(self, optimizer):
-        slots = [optimizer.get_slot(v, name)
-                 for v in tf.global_variables()
-                 for name in optimizer.get_slot_names()
-                 if optimizer.get_slot(v, name) is not None]
-
-        self.session.run(tf.variables_initializer(slots))
-
-        if hasattr(optimizer, '_get_beta_accumulators'):
-            self.session.run(
-                tf.variables_initializer(optimizer._get_beta_accumulators()))
 
     def h_net_input(self, v_batch):
         """Return the network input afferent to the hidden units.
@@ -259,6 +245,7 @@ class RBM(layer.Layer):
 
     def _sample_v_concrete(self, v_probs, summary=True):
         batch_size = tf.shape(v_probs)[0]
+
         unif_rand_vals = tf.random_uniform(shape=(batch_size, self.num_v),
                                            minval=0.0,
                                            maxval=1.0,
@@ -469,13 +456,15 @@ class RBM(layer.Layer):
 
     def test_generalisation(self,
                             test_data,
-                            output_table_path,
+                            output_x_fname,
                             num_iterations=1000,
                             num_runs=1,
                             num_samples_to_average=100):
-        test_point_ph = tf.placeholder(shape=(1, test_data.shape[1]), dtype=c.float_type, name='test_point_ph')
+        datapoint_ph = tf.placeholder(shape=(1, test_data.shape[1]),
+                                      dtype=c.float_type,
+                                      name='datapoint_ph')
 
-        tiled_test_datapoint = tf.tile(test_point_ph, [num_samples_to_average, 1])
+        tiled_test_datapoint = tf.tile(datapoint_ph, [num_samples_to_average, 1])
 
         datapoint = tf.get_variable(
             shape=(num_samples_to_average, test_data.shape[1]), name='datapoint')
@@ -486,15 +475,16 @@ class RBM(layer.Layer):
         downprop = self.downprop(upprop, sample=True)
         update_datapoint = datapoint.assign(downprop)
 
-        loss = dist.cross_entropy(tf.reduce_mean(datapoint, axis=0, keepdims=True), test_point_ph)
+        loss = dist.cross_entropy(tf.reduce_mean(datapoint, axis=0, keepdims=True), datapoint_ph)
 
         table = []
 
-        for test_point_index in range(test_data.shape[0]):
-            test_point = np.reshape(test_data[test_point_index], newshape=(1, test_data.shape[1]))
+        for dp in range(test_data.shape[0]):
+            print("Datapoint: " + str(dp))
+            datapoint_val = np.reshape(test_data[dp], newshape=(1, test_data.shape[1]))
             self.session.run(
                 init_datapoint,
-                feed_dict={test_point_ph: test_point})
+                feed_dict={datapoint_ph: datapoint_val})
 
             prev_dist = 10e7
 
@@ -502,22 +492,21 @@ class RBM(layer.Layer):
                 for i in range(num_iterations):
                     self.session.run(update_datapoint)
 
-                model_point = self.session.run(tf.reduce_mean(downprop, axis=0))
+                reconstruction = self.session.run(tf.reduce_mean(downprop, axis=0))
 
                 distance = self.session.run(
                         loss,
-                        feed_dict={test_point_ph: test_point})
+                        feed_dict={datapoint_ph: datapoint_val})
+                print(distance)
 
                 if distance < prev_dist:
-                    if table and table[-1][0] == test_point_index:
+                    if table and table[-1][0] == dp:
                         del table[-1]
-                    table.append((test_point_index, distance, test_point, model_point))
+                    table.append((dp, distance, datapoint_val, reconstruction))
                     prev_dist = distance
 
-                self.logger.info('Test point: {}, Run: {}, Distance: {}'.format(test_point_index, run, distance))
-
         import pickle
-        with open(output_table_path, 'wb') as f:
+        with open(output_x_fname, 'wb') as f:
             pickle.dump(table, f)
 
     def explore_latent_space(self):
@@ -530,6 +519,12 @@ class RBM(layer.Layer):
         if lower_layers and self.bottom:
             var_list = var_list + self.bottom._grad_var_list(lower_layers=True)
         return var_list
+
+    def _min_step(self, sgd, v_0_batch, v_k_batch):
+        loss = self.cd_loss(v_0_batch, v_k_batch)
+        return sgd.minimize(loss,
+                            var_list=self._grad_var_list(),
+                            gate_gradients=tf.train.Optimizer.GATE_GRAPH)
 
     def _eval_step(self,
                    test_data,
@@ -593,7 +588,6 @@ class RBM(layer.Layer):
         return data_distr, model_distr
 
     def train(self,
-              optimizer,
               training_data,
               test_data,
               num_gibbs_steps=1,
@@ -661,13 +655,8 @@ class RBM(layer.Layer):
 
         test_mse = dist.mse(test_v_1_batch, self.test_batch_ph)
 
-        loss = self.cd_loss(v_0_batch, v_k_batch)
-
-        min_step = optimizer.minimize(loss,
-                                      # var_list=self._grad_var_list(),
-                                      gate_gradients=tf.train.Optimizer.GATE_GRAPH)
-
-        self._init_optimizer_slots(optimizer)
+        sgd = tf.train.GradientDescentOptimizer(learning_rate=self.lr)
+        min_step = self._min_step(sgd, v_0_batch, v_k_batch)
 
         if lr_drop:
             drop_lr = tf.assign(self.lr, tf.multiply(self.lr, lr_drop))

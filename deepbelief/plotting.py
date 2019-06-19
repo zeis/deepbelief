@@ -479,13 +479,31 @@ class LatentSamplePlotter(LatentSpacePlotter):
                                           self.ylim,
                                           yflipud=True)
         self.num_samples_to_average = num_samples_to_average
+        self.output_dir = output_dir
 
         self.num_images = self.grid.shape[0]
+        self.fig_ext = fig_ext
         self.grid_plotter = ImageGridPlotter(num_images=self.num_images,
                                              image_shape=image_shape,
                                              num_columns=len(x),
                                              output_dir=output_dir,
                                              fig_ext=fig_ext)
+
+    def rebuild_grid(self, dx, dy, xlim, ylim):
+        self.xlim = xlim
+        self.ylim = ylim
+        self.grid, x, _ = self.build_grid(dx,
+                                          dy,
+                                          self.xlim,
+                                          self.ylim,
+                                          yflipud=True)
+
+        self.num_images = self.grid.shape[0]
+        self.grid_plotter = ImageGridPlotter(num_images=self.num_images,
+                                             image_shape=self.image_shape,
+                                             num_columns=len(x),
+                                             output_dir=self.output_dir,
+                                             fig_ext=self.fig_ext)
 
     def plot(self, image_vectors, fig_name):
         assert image_vectors.shape[1] == \

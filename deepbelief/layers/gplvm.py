@@ -224,7 +224,6 @@ class GPLVM(layer.Layer):
         return K + var * I
 
     def build_log_det(self):
-        # See Rasmussen and Williams book A.18
         return 2.0 * tf.reduce_sum(tf.log(tf.diag_part(self.L)))
 
     def build_X_prior(self):
@@ -349,12 +348,14 @@ class GPLVM(layer.Layer):
 
     def plot_latent_points(self, iteration=None):
         assert self.lp_plotter is not None
-        X, var_diag = self.session.run([self.X, self.pred_var], feed_dict={self.x_ph: self.lp_plotter.grid})
-        log_var_diag = np.log(var_diag)
+        log_var_diag = tf.log(self.pred_var)
+        X, var_diag = self.session.run(
+            [self.X, log_var_diag],
+            feed_dict={self.x_ph: self.lp_plotter.grid})
         fig_name = 'latent_points'
         if iteration is not None:
             fig_name = fig_name + '-' + str(iteration)
-        self.lp_plotter.plot(X, log_var_diag, fig_name, self.Y_labels)
+        self.lp_plotter.plot(X, var_diag, fig_name, self.Y_labels)
 
     def plot_latent_samples(self, iteration=None):
         # TODO: This code is common with other layers
@@ -447,8 +448,6 @@ class GPLVM(layer.Layer):
 
             self._eval_step(i)
 
-        self.session.graph.finalize()
-
         try:
             for i in range(i + 1, num_iterations + 1):
                 self.session.run(min_step)
@@ -469,73 +468,65 @@ class GPLVM(layer.Layer):
 
     def test_generalisation(self,
                             test_data,
-                            output_table_path,
+                            Q,
+                            output_x_fname,
                             optimizer,
-                            log_var_scaling=0.1,
                             num_iterations=1000,
                             num_runs=1):
-        test_point_ph = tf.placeholder(shape=(None, test_data.shape[1]), dtype=c.float_type, name='test_point_ph')
+        datapoint_ph = tf.placeholder(shape=(None, test_data.shape[1]),
+                                      dtype=c.float_type,
+                                      name='datapoint_ph')
 
         pred_mean = self.build_pred_mean_normalized(self.pred_mean)
         clipped_mean = tf.clip_by_value(self.pred_mean, 0.0, 1.0)
 
-        # loss = dist.cross_entropy(pred_mean, test_point_ph)
-        loss = 1 / test_data.shape[1] * dist.cross_entropy(pred_mean, test_point_ph) + log_var_scaling * tf.log(self.pred_var)
+        loss = dist.cross_entropy(pred_mean, datapoint_ph)
 
-        min_step = optimizer.minimize(loss, var_list=[self.x_test])
+        min_step = optimizer.minimize(
+            loss,
+            var_list=[self.x_test])
 
-        num_training_points = self.session.run(self.X).shape[0]
+        # x_rand_normal = tf.random_normal(
+        #         shape=(1, Q),
+        #         dtype=c.float_type)
+        # update_x_test = tf.assign(self.x_test, x_rand_normal)
 
-        assert num_runs <= num_training_points
+        X = self.session.run(self.X)
+        num_training_points = X.shape[0] - 1
+        random_integer = tf.random_uniform(shape=(1,), minval=0, maxval=num_training_points, dtype=tf.int32, seed=0, name=None)
 
-        if num_runs == num_training_points:
-            idx = tf.get_variable(initializer=0, name='idx', dtype=tf.int32)
-            zero_idx = tf.assign(idx, 0)
-            increment_idx = tf.assign(idx, idx + 1)
-            update_x_test = tf.assign(self.x_test, tf.reshape(self.X[idx], shape=(1, self.Q)))
-        else:
-            # At each run set the x_test variable at a random training latent location in X
-            random_integer = tf.random_uniform(shape=(1,),
-                                               minval=0,
-                                               maxval=num_training_points - 1,
-                                               dtype=tf.int32,
-                                               seed=0,
-                                               name=None)
-            update_x_test = tf.assign(self.x_test, tf.reshape(self.X[random_integer[0]], shape=(1, self.Q)))
+        update_x_test = tf.assign(self.x_test, tf.reshape(self.X[random_integer[0]], shape=(1, Q)))
 
         table = []
 
-        self.session.graph.finalize()
-
-        for test_point_index in range(test_data.shape[0]):
-            test_point = np.reshape(test_data[test_point_index], newshape=(1, test_data.shape[1]))
+        for dp in range(test_data.shape[0]):
+            print("Datapoint: " + str(dp))
+            datapoint_val = np.reshape(test_data[dp], newshape=(1, test_data.shape[1]))
             prev_dist = 10e7
-
-            if num_runs == num_training_points:
-                self.session.run(zero_idx)
 
             for run in range(num_runs):
                 self.session.run(update_x_test)
+                self._init_optimizer_slots(optimizer)
 
                 for i in range(num_iterations):
-                    self.session.run(min_step, feed_dict={test_point_ph: test_point})
-
-                distance, x, model_point, clipped_model_point = self.session.run(
+                    self.session.run(min_step,
+                                     feed_dict={datapoint_ph: datapoint_val})
+                distance, x, pred_mean_val, clipped_mean_val = self.session.run(
                         [loss, self.x_test, pred_mean, clipped_mean],
-                        feed_dict={test_point_ph: test_point})
+                        feed_dict={datapoint_ph: datapoint_val})
 
-                if num_runs == num_training_points:
-                    self.session.run(increment_idx)
+                # import matplotlib.pyplot as plt
+                # plt.imshow(np.reshape(sample_mean_val, newshape=(32, 32)), cmap=plt.cm.Greys_r)
+                # plt.show()
 
-                distance = distance[0]
+                print(distance)
+
                 if distance < prev_dist:
-                    if table and table[-1][0] == test_point_index:
+                    if table and table[-1][0] == dp:
                         del table[-1]
-                    table.append((test_point_index, distance, x, test_point, model_point, clipped_model_point))
+                    table.append((dp, distance, x, datapoint_val, pred_mean_val, clipped_mean_val))
                     prev_dist = distance
 
-                self.logger.info('Test point: {}, Run: {}, Distance: {}'.format(test_point_index, run, distance))
-
         import pickle
-        with open(output_table_path, 'wb') as f:
+        with open(output_x_fname, 'wb') as f:
             pickle.dump(table, f)
