@@ -12,7 +12,6 @@ setup(
         'numpy==1.16.4',
         'Pillow==6.0.0',
         'scipy==1.1.0',
-        'six==1.12.0',
-        'tensorflow==1.8.0'
+        'six==1.12.0'
     ]
 )
