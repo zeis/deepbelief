@@ -10,7 +10,7 @@ setup(
         'Keras==2.2.4',
         'matplotlib==3.0.3',
         'numpy==1.16.4',
-        'Pillow==6.0.0',
+        'Pillow==8.2.0',
         'scipy==1.1.0',
         'six==1.12.0'
     ]
