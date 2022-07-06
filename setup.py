@@ -9,7 +9,7 @@ setup(
         'h5py==2.9.0',
         'Keras==2.2.4',
         'matplotlib==3.0.3',
-        'numpy==1.16.4',
+        'numpy==1.22.0',
         'Pillow==6.0.0',
         'scipy==1.1.0',
         'six==1.12.0'
